@@ -1,0 +1,155 @@
+# NavisworksAutoClose.ps1
+# Automatically saves and closes Navisworks at scheduled time
+# Warning given 5 minutes before hard close
+# Deploy via Task Scheduler on each workstation
+
+$NavisworksProcess = "Navisworks*"
+$WarningMinutes = 5
+$LogPath = "\\your-network-path\logs\NavisworksAutoClose.log"  # UPDATE THIS PATH
+
+function Write-Log {
+    param([string]$Message)
+    $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $logEntry = "$timestamp - $Message"
+    Write-Host $logEntry
+    try {
+        Add-Content -Path $LogPath -Value $logEntry -ErrorAction SilentlyContinue
+    } catch {
+        # Log path unavailable, continue anyway
+    }
+}
+
+function Get-NavisworksWindows {
+    return Get-Process -Name $NavisworksProcess -ErrorAction SilentlyContinue
+}
+
+function Send-ToastNotification {
+    param([string]$Message, [string]$Title = "Navisworks Auto-Close")
+    
+    # Windows 10/11 Toast Notification
+    $null = [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime]
+    $null = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom.XmlDocument, ContentType = WindowsRuntime]
+    
+    $toastXml = @"
+<toast>
+    <visual>
+        <binding template="ToastGeneric">
+            <text>$Title</text>
+            <text>$Message</text>
+        </binding>
+    </visual>
+    <audio src="ms-winsoundevent:Notification.Looping.Alarm" loop="false"/>
+</toast>
+"@
+    
+    try {
+        $xml = New-Object Windows.Data.Xml.Dom.XmlDocument
+        $xml.LoadXml($toastXml)
+        $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
+        $notifier = [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("Navisworks AutoClose")
+        $notifier.Show($toast)
+    } catch {
+        # Fallback to popup if toast fails
+        $wshell = New-Object -ComObject Wscript.Shell
+        $wshell.Popup($Message, 10, $Title, 0x30) | Out-Null
+    }
+}
+
+function Save-NavisworksFiles {
+    param($processes)
+    
+    Write-Log "Attempting to save Navisworks files via Ctrl+S"
+    
+    Add-Type -AssemblyName System.Windows.Forms
+    
+    foreach ($proc in $processes) {
+        try {
+            # Bring window to focus
+            $hwnd = $proc.MainWindowHandle
+            if ($hwnd -ne [IntPtr]::Zero) {
+                [System.Windows.Forms.SetForegroundWindow]::SetForegroundWindow($hwnd) | Out-Null
+                Start-Sleep -Milliseconds 500
+                
+                # Send Ctrl+S to save
+                [System.Windows.Forms.SendKeys]::SendWait("^s")
+                Start-Sleep -Seconds 2
+                
+                Write-Log "Save command sent to process: $($proc.Name) (PID: $($proc.Id))"
+            }
+        } catch {
+            Write-Log "Error saving process $($proc.Id): $_"
+        }
+    }
+}
+
+function Close-NavisworksGracefully {
+    param($processes)
+    
+    foreach ($proc in $processes) {
+        try {
+            Write-Log "Closing Navisworks process PID: $($proc.Id)"
+            $proc.CloseMainWindow() | Out-Null
+            $proc.WaitForExit(10000)  # Wait up to 10 seconds
+            
+            # Force kill if still running
+            if (!$proc.HasExited) {
+                Write-Log "Force killing PID: $($proc.Id) - did not close gracefully"
+                $proc.Kill()
+            }
+        } catch {
+            Write-Log "Error closing process $($proc.Id): $_"
+        }
+    }
+}
+
+# ============================================================
+# MAIN EXECUTION
+# ============================================================
+
+Write-Log "NavisworksAutoClose script started"
+
+$navisProcesses = Get-NavisworksWindows
+
+if ($null -eq $navisProcesses -or $navisProcesses.Count -eq 0) {
+    Write-Log "No Navisworks processes found. Exiting."
+    exit 0
+}
+
+Write-Log "Found $($navisProcesses.Count) Navisworks process(es) running"
+
+# ---- WARNING NOTIFICATION (T-5 minutes) ----
+$warningMessage = "Navisworks will automatically save and close in $WarningMinutes minutes. Please finish your current work."
+Write-Log "Sending 5-minute warning notification to user: $env:USERNAME"
+Send-ToastNotification -Message $warningMessage
+
+# ---- WAIT 4 MINUTES ----
+Write-Log "Waiting 4 minutes before save..."
+Start-Sleep -Seconds 240
+
+# ---- 1 MINUTE WARNING ----
+$finalWarning = "Navisworks is saving and closing in 1 minute. FINAL WARNING."
+Write-Log "Sending 1-minute final warning"
+Send-ToastNotification -Message $finalWarning
+
+# ---- WAIT FINAL MINUTE ----
+Start-Sleep -Seconds 60
+
+# ---- SAVE ----
+$navisProcesses = Get-NavisworksWindows  # Refresh process list
+if ($navisProcesses) {
+    Write-Log "Initiating autosave..."
+    Send-ToastNotification -Message "Saving your Navisworks files now..."
+    Save-NavisworksFiles -processes $navisProcesses
+    Start-Sleep -Seconds 3
+    
+    # ---- HARD CLOSE ----
+    Write-Log "Initiating hard close..."
+    Close-NavisworksGracefully -processes $navisProcesses
+    Write-Log "Navisworks closed successfully"
+    
+    Send-ToastNotification -Message "Navisworks has been closed. Your work was saved." -Title "Navisworks Closed"
+} else {
+    Write-Log "Navisworks already closed before hard stop. No action needed."
+}
+
+Write-Log "NavisworksAutoClose script completed"
