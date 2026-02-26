@@ -1,0 +1,52 @@
+# Deploy-NavisworksTask.ps1
+# Run this ONCE on each workstation as Administrator to register the scheduled task
+# Or deploy via Group Policy across all workstations simultaneously
+
+# ============================================================
+# CONFIGURATION - UPDATE THESE PATHS
+# ============================================================
+$ScriptPath = "\\your-network-path\scripts\NavisworksAutoClose.ps1"  # UPDATE: UNC path to script on network
+$TaskName = "NavisworksAutoClose"
+$TaskDescription = "Automatically saves and closes Navisworks at noon daily"
+$TriggerTime = "11:55AM"  # Task runs at 11:55 so warnings land at 11:55, hard close at 12:00
+
+# ============================================================
+# REGISTER SCHEDULED TASK
+# ============================================================
+
+# Remove existing task if present
+Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+
+# Define the action
+$Action = New-ScheduledTaskAction `
+    -Execute "PowerShell.exe" `
+    -Argument "-NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ScriptPath`""
+
+# Define the trigger - daily at 11:55AM
+$Trigger = New-ScheduledTaskTrigger -Daily -At $TriggerTime
+
+# Run as current logged-in user so toast notifications appear on their desktop
+$Principal = New-ScheduledTaskPrincipal `
+    -UserId "INTERACTIVE" `
+    -LogonType Interactive `
+    -RunLevel Limited
+
+# Task settings
+$Settings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 10) `
+    -MultipleInstances IgnoreNew `
+    -StartWhenAvailable
+
+# Register the task
+Register-ScheduledTask `
+    -TaskName $TaskName `
+    -Description $TaskDescription `
+    -Action $Action `
+    -Trigger $Trigger `
+    -Principal $Principal `
+    -Settings $Settings `
+    -Force
+
+Write-Host "Task '$TaskName' registered successfully. Navisworks will auto-save and close at noon daily." -ForegroundColor Green
+Write-Host "Script path: $ScriptPath" -ForegroundColor Cyan
+Write-Host "Trigger time: $TriggerTime (5 min warning before noon hard close)" -ForegroundColor Cyan
