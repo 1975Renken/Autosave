@@ -5,7 +5,7 @@
 
 $NavisworksProcess = "Navisworks*"
 $WarningMinutes = 5
-$LogPath = "\\your-network-path\logs\NavisworksAutoClose.log"  # UPDATE THIS PATH
+$LogPath = "C:\Projects\NavisworksAutoClose\test_log.txt"  
 
 function Write-Log {
     param([string]$Message)
